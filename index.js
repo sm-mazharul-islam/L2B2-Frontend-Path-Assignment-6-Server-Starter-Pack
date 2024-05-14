@@ -1,7 +1,8 @@
 const express = require("express");
 const cors = require("cors");
 const bcrypt = require("bcrypt");
-const { MongoClient } = require("mongodb");
+const { MongoClient, ObjectId } = require("mongodb");
+
 require("dotenv").config();
 const jwt = require("jsonwebtoken");
 
@@ -25,8 +26,10 @@ async function run() {
     await client.connect();
     console.log("Connected to MongoDB");
 
-    const db = client.db("assignment");
-    const collection = db.collection("users");
+    const db = client.db("l2-assignment-06");
+    const collection = db.collection("user");
+    const reliefGoodsCollection = db.collection("reliefgoods");
+    const ourRecentWorksCollection = db.collection("ourRecentlyWorks");
 
     // User Registration
     app.post("/api/v1/register", async (req, res) => {
@@ -83,6 +86,50 @@ async function run() {
 
     // ==============================================================
     // WRITE YOUR CODE HERE
+
+    app.get("/our-recent-works", async (req, res) => {
+      // let query = {};
+      // if (req.query.priority) {
+      //   query.priority = req.query.priority;
+      // }
+      const cursor = ourRecentWorksCollection.find({});
+      const ourRecentWorksFile = await cursor.toArray();
+      res.send({ status: true, data: ourRecentWorksFile });
+    });
+    app.get("/relief-goods", async (req, res) => {
+      // let query = {};
+      // if (req.query.priority) {
+      //   query.priority = req.query.priority;
+      // }
+      const cursor = reliefGoodsCollection.find({});
+      const reliefGoodsFile = await cursor.toArray();
+      res.send({ status: true, data: reliefGoodsFile });
+    });
+    app.post("/relief-goods", async (req, res) => {
+      const reliefGoods = req.body;
+      const result = await reliefGoodsCollection.insertOne(reliefGoods);
+      res.send(result);
+    });
+
+    app.get("/relief-goods/:id", async (req, res) => {
+      const id = req.params.id;
+      console.log("getting specific service", id);
+      const nid = new ObjectId(id);
+      const query = { _id: nid };
+      const result = await reliefGoodsCollection.findOne(query);
+      console.log(result);
+      res.send(result);
+    });
+
+    app.delete("/relief-goods/:id", async (req, res) => {
+      const id = req.params.id;
+      const delId = new ObjectId(id);
+      const delOne = { _id: delId };
+      const result = await reliefGoodsCollection.deleteOne(delOne);
+      // console.log(result);
+      res.send(result);
+    });
+
     // ==============================================================
 
     // Start the server
