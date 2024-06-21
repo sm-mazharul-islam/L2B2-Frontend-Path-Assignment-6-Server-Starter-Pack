@@ -130,6 +130,98 @@ async function run() {
       res.send(result);
     });
 
+    // app.put("/relief-goods/:id", async (req, res) => {
+    //   const id = req.params.id;
+    //   console.log(id);
+    //   const task = req.body;
+    //   const filter = { _id: ObjectId(id) };
+    //   const updateDoc = {
+    //     $set: {
+    //       // isCompleted: task.isCompleted,
+    //       title: task.title,
+    //       category: task.category,
+    //       item: task.item,
+    //       reason: task.reason,
+    //       amount: task.amount,
+    //       description: task.description,
+    //       priority: task.priority,
+    //     },
+    //   };
+    //   const options = { upsert: true };
+    //   const result = await reliefGoodsCollection.updateOne(
+    //     filter,
+    //     updateDoc,
+    //     options
+    //   );
+    //   res.json(result);
+    // });
+
+    ///////////////////
+
+    app.put("/relief-goods/:id", async (req, res) => {
+      const id = req.params.id;
+      console.log(id);
+      const task = req.body;
+
+      try {
+        const filter = { _id: new ObjectId(id) }; // Convert id to ObjectId
+        const updateDoc = {
+          $set: {
+            title: task.title,
+            category: task.category,
+            item: task.item,
+            reason: task.reason,
+            amount: task.amount,
+            description: task.description,
+            priority: task.priority,
+          },
+        };
+        const options = { upsert: true };
+        const result = await reliefGoodsCollection.updateOne(
+          filter,
+          updateDoc,
+          options
+        );
+
+        res.json(result);
+      } catch (error) {
+        console.error("Error updating relief goods:", error);
+        res.status(500).json({ message: "Error updating relief goods" });
+      }
+    });
+
+    // app.patch("/relief-goods/:id", async (req, res) => {
+    //   const id = req.params.id;
+    //   console.log(id);
+    //   const task = req.body;
+
+    //   try {
+    //     const filter = { _id: new ObjectId(id) }; // Convert id to ObjectId
+    //     const updateDoc = {
+    //       $set: {},
+    //     };
+
+    //     // Loop through request body and update only the provided fields
+    //     Object.keys(task).forEach((key) => {
+    //       if (task[key] !== undefined) {
+    //         updateDoc.$set[key] = task[key];
+    //       }
+    //     });
+
+    //     const options = { upsert: true };
+    //     const result = await reliefGoodsCollection.updateOne(
+    //       filter,
+    //       updateDoc,
+    //       options
+    //     );
+
+    //     res.json(result);
+    //   } catch (error) {
+    //     console.error("Error updating relief goods:", error);
+    //     res.status(500).json({ message: "Error updating relief goods" });
+    //   }
+    // });
+
     // ==============================================================
 
     // Start the server
