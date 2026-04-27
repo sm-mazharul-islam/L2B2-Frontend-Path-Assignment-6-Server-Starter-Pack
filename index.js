@@ -88,69 +88,50 @@ async function run() {
 
     // --- LOGIN ROUTE ---
 
-    app.post("/login", async (req, res) => {
-      console.log("1. Login attempt for:", req.body.email);
-
+    app.post("/api/v1/login", async (req, res) => {
       try {
         const { email, password } = req.body;
-
-        // 2. Basic Validation: Ensure fields aren't empty
-        if (!email || !password) {
-          return res.status(400).json({
-            success: false,
-            message: "Email and password are required",
-          });
-        }
-
-        // 3. Find user by email
         const user = await userCollection.findOne({ email });
+
         if (!user) {
-          console.log("❌ User not found in DB");
-          return res.status(401).json({
-            success: false,
-            message: "Invalid email or password",
-          });
+          return res
+            .status(401)
+            .json({ success: false, message: "Invalid credentials" });
         }
 
-        // 4. Compare hashed password using bcrypt
         const isPasswordValid = await bcrypt.compare(password, user.password);
         if (!isPasswordValid) {
-          console.log("❌ Password mismatch");
-          return res.status(401).json({
-            success: false,
-            message: "Invalid email or password",
-          });
+          return res
+            .status(401)
+            .json({ success: false, message: "Invalid credentials" });
         }
 
-        // 5. Generate JWT token
-        // Ensure JWT_SECRET and EXPIRES_IN are in your .env file
+        // --- Token Generation (Fix Here) ---
+        const secret = process.env.JWT_SECRET;
+        if (!secret) {
+          console.error("🔥 ERROR: JWT_SECRET is missing from .env!");
+          // Jodi secret na thake, login crash kora swobhabik.
+        }
+
         const token = jwt.sign(
-          { email: user.email, name: user.name },
-          process.env.JWT_SECRET,
-          { expiresIn: process.env.EXPIRES_IN || "1h" },
+          { email: user.email },
+          secret || "temporary_fallback_secret", // Emergency fallback
+          { expiresIn: "7d" },
         );
 
-        // 6. Send Success Response
-        console.log("✅ Login successful for:", user.email);
-        res.status(200).json({
+        res.json({
           success: true,
           message: "Login successful",
           token,
-          user: {
-            name: user.name,
-            email: user.email,
-          },
+          user: { name: user.name, email: user.email },
         });
       } catch (error) {
-        // This catch block prevents the "j is not defined" or server crash
-        console.error("🔥 Login Route Error:", error);
-        res.status(500).json({
-          success: false,
-          message: "Internal server error",
-        });
+        console.error("🔥 Server Login Error:", error);
+        res
+          .status(500)
+          .json({ success: false, message: "Internal server error" });
       }
     });
-
     // ======================================================
     // WRITE YOUR CODE HERE
 
