@@ -1,8 +1,7 @@
 const express = require("express");
 const cors = require("cors");
 const bcrypt = require("bcrypt");
-const { MongoClient, ObjectId } = require("mongodb");
-
+const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
 require("dotenv").config();
 const jwt = require("jsonwebtoken");
 
@@ -15,9 +14,14 @@ app.use(express.json());
 
 // MongoDB Connection URL
 const uri = process.env.MONGODB_URI;
+
+// You no longer need useNewUrlParser or useUnifiedTopology
 const client = new MongoClient(uri, {
-  useNewUrlParser: true,
-  useUnifiedTopology: true,
+  serverApi: {
+    version: ServerApiVersion.v1,
+    strict: true,
+    deprecationErrors: true,
+  },
 });
 
 async function run() {
@@ -27,61 +31,124 @@ async function run() {
     console.log("Connected to MongoDB");
 
     const db = client.db("l2-assignment-06");
-    const collection = db.collection("user");
+    const userCollection = db.collection("user");
     const reliefGoodsCollection = db.collection("reliefgoods");
     const ourRecentWorksCollection = db.collection("ourRecentlyWorks");
 
-    // User Registration
-    app.post("/api/v1/register", async (req, res) => {
-      const { name, email, password } = req.body;
+    // --- Authentication Routes ---
 
-      // Check if email already exists
-      const existingUser = await collection.findOne({ email });
-      if (existingUser) {
-        return res.status(400).json({
-          success: false,
-          message: "User already exists",
+    app.post("/register", async (req, res) => {
+      console.log("--- 2. Request received at /api/v1/register ---");
+      console.log("Payload:", req.body);
+
+      try {
+        const { name, email, password } = req.body;
+
+        if (!name || !email || !password) {
+          console.log("❌ Error: Missing fields");
+          return res
+            .status(400)
+            .json({ success: false, message: "All fields are required" });
+        }
+
+        const existingUser = await userCollection.findOne({ email });
+        if (existingUser) {
+          console.log("❌ Error: User exists");
+          return res
+            .status(400)
+            .json({ success: false, message: "Email already exists" });
+        }
+
+        const hashedPassword = await bcrypt.hash(password, 10);
+        const result = await userCollection.insertOne({
+          name,
+          email,
+          password: hashedPassword,
+          createdAt: new Date(),
         });
+
+        console.log(
+          "✅ 3. User Registered Successfully. ID:",
+          result.insertedId,
+        );
+        res.status(201).json({
+          success: true,
+          message: "Registration successful",
+          userId: result.insertedId,
+        });
+      } catch (err) {
+        console.error("🔥 Route Error:", err);
+        res
+          .status(500)
+          .json({ success: false, message: "Internal server error" });
       }
-
-      // Hash the password
-      const hashedPassword = await bcrypt.hash(password, 10);
-
-      // Insert user into the database
-      await collection.insertOne({ name, email, password: hashedPassword });
-
-      res.status(201).json({
-        success: true,
-        message: "User registered successfully",
-      });
     });
 
-    // User Login
-    app.post("/api/v1/login", async (req, res) => {
-      const { email, password } = req.body;
+    // --- End Authentication Routes ---
 
-      // Find user by email
-      const user = await collection.findOne({ email });
-      if (!user) {
-        return res.status(401).json({ message: "Invalid email or password" });
+    // --- LOGIN ROUTE ---
+
+    app.post("/login", async (req, res) => {
+      console.log("1. Login attempt for:", req.body.email);
+
+      try {
+        const { email, password } = req.body;
+
+        // 2. Basic Validation: Ensure fields aren't empty
+        if (!email || !password) {
+          return res.status(400).json({
+            success: false,
+            message: "Email and password are required",
+          });
+        }
+
+        // 3. Find user by email
+        const user = await userCollection.findOne({ email });
+        if (!user) {
+          console.log("❌ User not found in DB");
+          return res.status(401).json({
+            success: false,
+            message: "Invalid email or password",
+          });
+        }
+
+        // 4. Compare hashed password using bcrypt
+        const isPasswordValid = await bcrypt.compare(password, user.password);
+        if (!isPasswordValid) {
+          console.log("❌ Password mismatch");
+          return res.status(401).json({
+            success: false,
+            message: "Invalid email or password",
+          });
+        }
+
+        // 5. Generate JWT token
+        // Ensure JWT_SECRET and EXPIRES_IN are in your .env file
+        const token = jwt.sign(
+          { email: user.email, name: user.name },
+          process.env.JWT_SECRET,
+          { expiresIn: process.env.EXPIRES_IN || "1h" },
+        );
+
+        // 6. Send Success Response
+        console.log("✅ Login successful for:", user.email);
+        res.status(200).json({
+          success: true,
+          message: "Login successful",
+          token,
+          user: {
+            name: user.name,
+            email: user.email,
+          },
+        });
+      } catch (error) {
+        // This catch block prevents the "j is not defined" or server crash
+        console.error("🔥 Login Route Error:", error);
+        res.status(500).json({
+          success: false,
+          message: "Internal server error",
+        });
       }
-
-      // Compare hashed password
-      const isPasswordValid = await bcrypt.compare(password, user.password);
-      if (!isPasswordValid) {
-        return res.status(401).json({ message: "Invalid email or password" });
-      }
-
-      // Generate JWT token
-      const token = jwt.sign({ email: user.email }, process.env.JWT_SECRET, {
-        expiresIn: process.env.EXPIRES_IN,
-      });
-
-      res.json({
-        success: true,
-        message: "Login successful",
-        token,
-      });
     });
 
     // ======================================================
@@ -130,34 +197,6 @@ async function run() {
       res.send(result);
     });
 
-    // app.put("/relief-goods/:id", async (req, res) => {
-    //   const id = req.params.id;
-    //   console.log(id);
-    //   const task = req.body;
-    //   const filter = { _id: ObjectId(id) };
-    //   const updateDoc = {
-    //     $set: {
-    //       // isCompleted: task.isCompleted,
-    //       title: task.title,
-    //       category: task.category,
-    //       item: task.item,
-    //       reason: task.reason,
-    //       amount: task.amount,
-    //       description: task.description,
-    //       priority: task.priority,
-    //     },
-    //   };
-    //   const options = { upsert: true };
-    //   const result = await reliefGoodsCollection.updateOne(
-    //     filter,
-    //     updateDoc,
-    //     options
-    //   );
-    //   res.json(result);
-    // });
-
-    ///////////////////
-
     app.put("/relief-goods/:id", async (req, res) => {
       const id = req.params.id;
       console.log(id);
@@ -180,7 +219,7 @@ async function run() {
         const result = await reliefGoodsCollection.updateOne(
           filter,
           updateDoc,
-          options
+          options,
         );
 
         res.json(result);
@@ -189,40 +228,6 @@ async function run() {
         res.status(500).json({ message: "Error updating relief goods" });
       }
     });
-
-    // app.patch("/relief-goods/:id", async (req, res) => {
-    //   const id = req.params.id;
-    //   console.log(id);
-    //   const task = req.body;
-
-    //   try {
-    //     const filter = { _id: new ObjectId(id) }; // Convert id to ObjectId
-    //     const updateDoc = {
-    //       $set: {},
-    //     };
-
-    //     // Loop through request body and update only the provided fields
-    //     Object.keys(task).forEach((key) => {
-    //       if (task[key] !== undefined) {
-    //         updateDoc.$set[key] = task[key];
-    //       }
-    //     });
-
-    //     const options = { upsert: true };
-    //     const result = await reliefGoodsCollection.updateOne(
-    //       filter,
-    //       updateDoc,
-    //       options
-    //     );
-
-    //     res.json(result);
-    //   } catch (error) {
-    //     console.error("Error updating relief goods:", error);
-    //     res.status(500).json({ message: "Error updating relief goods" });
-    //   }
-    // });
-
-    // ==============================================================
 
     // Start the server
     app.listen(port, () => {
