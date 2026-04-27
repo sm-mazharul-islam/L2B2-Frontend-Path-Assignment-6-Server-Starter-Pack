@@ -88,7 +88,7 @@ async function run() {
 
     // --- LOGIN ROUTE ---
 
-    app.post("/api/v1/login", async (req, res) => {
+    app.post("/login", async (req, res) => {
       try {
         const { email, password } = req.body;
         const user = await userCollection.findOne({ email });
