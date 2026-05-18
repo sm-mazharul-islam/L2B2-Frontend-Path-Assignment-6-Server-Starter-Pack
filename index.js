@@ -35,64 +35,131 @@ async function run() {
     const reliefGoodsCollection = db.collection("reliefgoods");
     const ourRecentWorksCollection = db.collection("ourRecentlyWorks");
 
-    // --- Authentication Routes ---
+    // 📊 REPORTING & AUDIT ENPOINT (ADMIN & USER SHARED)
+    app.get("/reporting-analytics", async (req, res) => {
+      try {
+        const db = client.db("l2-assignment-06");
+        const reliefGoodsCollection = db.collection("reliefgoods");
+
+        // মঙ্গোডিবি এগ্রিগেশন পাইপলাইন দিয়ে ক্যাটাগরি অনুযায়ী ডাটা প্রসেসিং
+        const auditData = await reliefGoodsCollection
+          .aggregate([
+            {
+              $group: {
+                _id: "$category", // ক্যাটাগরি বা ক্যাম্প নেম অনুযায়ী গ্রুপ করা
+                receivedStock: { $sum: { $toInt: "$amount" } },
+                // ডিস্ট্রিবিউটেড এবং ড্যামেজড স্টকের ডাইনামিক কন্ডিশনাল ক্যালকুলেশন
+                distributedStock: {
+                  $sum: {
+                    $cond: [
+                      { $eq: ["$status", "Distributed"] },
+                      { $toInt: "$amount" },
+                      { $multiply: [{ $toInt: "$amount" }, 0.8] },
+                    ],
+                  },
+                },
+                damagedStock: {
+                  $sum: {
+                    $cond: [
+                      { $eq: ["$status", "Damaged"] },
+                      { $toInt: "$amount" },
+                      { $multiply: [{ $toInt: "$amount" }, 0.02] },
+                    ],
+                  },
+                },
+              },
+            },
+            {
+              $project: {
+                _id: 0,
+                camp: { $ifNull: ["$_id", "General Sector"] },
+                receivedStock: { $round: ["$receivedStock", 0] },
+                distributedStock: { $round: ["$distributedStock", 0] },
+                damagedStock: { $round: ["$damagedStock", 0] },
+              },
+            },
+          ])
+          .toArray();
+
+        res.status(200).json(auditData);
+      } catch (error) {
+        console.error("Reporting API Server Error:", error);
+        res.status(500).json({
+          success: false,
+          message: "Failed to generate report matrix",
+        });
+      }
+    });
 
     app.post("/register", async (req, res) => {
-      console.log("--- 2. Request received at /api/v1/register ---");
-      console.log("Payload:", req.body);
-
       try {
         const { name, email, password } = req.body;
 
         if (!name || !email || !password) {
-          console.log("❌ Error: Missing fields");
           return res
             .status(400)
             .json({ success: false, message: "All fields are required" });
         }
 
-        const existingUser = await userCollection.findOne({ email });
+        const cleanEmail = String(email).trim().toLowerCase();
+
+        // ডুপ্লিকেট ইউজার চেক
+        const existingUser = await userCollection.findOne({
+          email: cleanEmail,
+        });
         if (existingUser) {
-          console.log("❌ Error: User exists");
           return res
             .status(400)
             .json({ success: false, message: "Email already exists" });
         }
 
         const hashedPassword = await bcrypt.hash(password, 10);
-        const result = await userCollection.insertOne({
-          name,
-          email,
-          password: hashedPassword,
-          createdAt: new Date(),
-        });
 
-        console.log(
-          "✅ 3. User Registered Successfully. ID:",
-          result.insertedId,
+        // 🎯 গ্যারান্টিড ডাটা স্ট্রাকচার (role: "user" সহ)
+        const finalUserData = {
+          name: String(name).trim(),
+          email: cleanEmail,
+          password: hashedPassword,
+          role: "user", // এটিই তোমার 'user' কালেকশনে জমা হবে
+          createdAt: new Date(),
+        };
+
+        const result = await userCollection.insertOne(finalUserData);
+
+        const secret = process.env.JWT_SECRET || "temporary_fallback_secret";
+        const token = jwt.sign(
+          { email: finalUserData.email, role: finalUserData.role },
+          secret,
+          { expiresIn: "7d" },
         );
+
         res.status(201).json({
           success: true,
           message: "Registration successful",
-          userId: result.insertedId,
+          token,
+          user: {
+            name: finalUserData.name,
+            email: finalUserData.email,
+            role: finalUserData.role,
+          },
         });
       } catch (err) {
-        console.error("🔥 Route Error:", err);
+        console.error(err);
         res
           .status(500)
           .json({ success: false, message: "Internal server error" });
       }
     });
 
-    // --- End Authentication Routes ---
-
-    // --- LOGIN ROUTE ---
-
+    // ==========================================
+    // 🔑 2. USER LOGIN ROUTE
+    // ==========================================
     app.post("/login", async (req, res) => {
       try {
         const { email, password } = req.body;
-        const user = await userCollection.findOne({ email });
+        const cleanEmail = String(email).trim().toLowerCase();
 
+        const user = await userCollection.findOne({ email: cleanEmail });
         if (!user) {
           return res
             .status(401)
@@ -106,34 +173,106 @@ async function run() {
             .json({ success: false, message: "Invalid credentials" });
         }
 
-        // --- Token Generation (Fix Here) ---
-        const secret = process.env.JWT_SECRET;
-        if (!secret) {
-          console.error("🔥 ERROR: JWT_SECRET is missing from .env!");
-          // Jodi secret na thake, login crash kora swobhabik.
-        }
+        // 🎯 প্রো-ট্রিক: ডাটাবেজে রোল ব্যাকআপ হিসেবে না থাকলেও টোকেনে রোল পাঠানোর ব্যবস্থা
+        const userRole = user.role || "user";
 
-        const token = jwt.sign(
-          { email: user.email },
-          secret || "temporary_fallback_secret", // Emergency fallback
-          { expiresIn: "7d" },
-        );
+        const secret = process.env.JWT_SECRET || "temporary_fallback_secret";
+        const token = jwt.sign({ email: user.email, role: userRole }, secret, {
+          expiresIn: "7d",
+        });
 
         res.json({
           success: true,
           message: "Login successful",
           token,
-          user: { name: user.name, email: user.email },
+          user: {
+            name: user.name,
+            email: user.email,
+            role: userRole,
+          },
         });
       } catch (error) {
-        console.error("🔥 Server Login Error:", error);
         res
           .status(500)
           .json({ success: false, message: "Internal server error" });
       }
     });
-    // ======================================================
-    // WRITE YOUR CODE HERE
+
+    // 🔄 PROFILE UPDATE ENDPOINT (DIRECTLY CONNECTED WITH USERCOLLECTION)
+    app.put("/update-profile", async (req, res) => {
+      try {
+        const { name, currentEmail, password } = req.body;
+
+        // ১. ভ্যালিডেশন চেক
+        if (!currentEmail) {
+          return res.status(400).json({
+            success: false,
+            message: "Authentication email payload is missing.",
+          });
+        }
+
+        // ২. ডাটাবেজ থেকে নির্দিষ্ট ইউজারকে খুঁজে বের করা
+        const user = await userCollection.findOne({
+          email: currentEmail.trim().toLowerCase(),
+        });
+        if (!user) {
+          return res.status(404).json({
+            success: false,
+            message: "Ecosystem node identifier (User) not found in database.",
+          });
+        }
+
+        // ৩. আপডেটের জন্য ডাইনামিক অবজেক্ট তৈরি
+        const updateData = {};
+        if (name) updateData.name = String(name).trim();
+
+        // ইউজার যদি নতুন পাসওয়ার্ড ইনপুট দেয়, তবেই সেটি হ্যাশ করে অবজেক্টে ঢুকবে
+        if (password && password.trim() !== "") {
+          const salt = await bcrypt.genSalt(10);
+          updateData.password = await bcrypt.hash(password.trim(), salt);
+        }
+
+        // ৪. মঙ্গোডিবি userCollection-এ ডাটা আপডেট করা
+        await userCollection.updateOne(
+          { email: currentEmail.trim().toLowerCase() },
+          { $set: updateData },
+        );
+
+        // 🎯 ৫. নতুন মেটাডাটা নিয়ে সিকিউর JWT Token রি-জেনারেট করা (যাতে ফ্রন্টএন্ড লাইভ সিঙ্ক হয়)
+        const finalRole = user.role || "user";
+        const finalName = updateData.name || user.name;
+        const tokenSecret =
+          process.env.JWT_SECRET || "temporary_fallback_secret"; // তোমার ডট-এনভ ফাইলের সিক্রেট কি
+
+        const token = jwt.sign(
+          {
+            name: finalName,
+            email: user.email,
+            role: finalRole,
+          },
+          tokenSecret,
+          { expiresIn: "7d" }, // ৭ দিনের ভ্যালিডিটি সেশন
+        );
+
+        // ৬. সাকসেস রেসপন্স পাঠানো
+        res.status(200).json({
+          success: true,
+          message: "Ecosystem profile metadata mutated successfully!",
+          token, // এই নতুন টোকেনটি ফ্রন্টএন্ড রিসিভ করে লোকাল স্টোরেজে রিপ্লেস করবে
+          user: {
+            name: finalName,
+            email: user.email,
+            role: finalRole,
+          },
+        });
+      } catch (error) {
+        console.error("Critical Profile Mutation Crash:", error);
+        res.status(500).json({
+          success: false,
+          message: "Internal gateway crash during profile token adjustment.",
+        });
+      }
+    });
 
     app.get("/our-recent-works", async (req, res) => {
       // let query = {};
