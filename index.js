@@ -35,20 +35,105 @@ async function run() {
     const reliefGoodsCollection = db.collection("reliefgoods");
     const ourRecentWorksCollection = db.collection("ourRecentlyWorks");
 
+    // 💰 DONATION PAYMENT/CONTRIBUTION UPDATE ENDPOINT
+    // 💰 UPDATED DONATION LEDGER ENDPOINT
+    app.put("/relief-goods/:id", async (req, res) => {
+      try {
+        const { id } = req.params;
+        const { donateAmount, userEmail, campaignTitle, category } = req.body;
+
+        if (!donateAmount || donateAmount <= 0) {
+          return res
+            .status(400)
+            .json({ success: false, message: "Invalid payload." });
+        }
+
+        const filter = { _id: new ObjectId(id) };
+        const updateDoc = { $inc: { raisedAmount: Number(donateAmount) } };
+        await reliefGoodsCollection.updateOne(filter, updateDoc);
+
+        if (userEmail) {
+          const donationLog = {
+            userEmail: userEmail.trim().toLowerCase(),
+            campaignTitle: campaignTitle || "Relief Package Aid",
+            category: category || "General",
+            amount: Number(donateAmount),
+            timestamp: new Date(),
+          };
+          await db.collection("donations").insertOne(donationLog);
+        }
+
+        const updatedGoods = await reliefGoodsCollection.findOne(filter);
+        res.status(200).json(updatedGoods);
+      } catch (error) {
+        res
+          .status(500)
+          .json({ success: false, message: "Ledger insertion failed." });
+      }
+    });
+
+    app.get("/user/donation-history/:email", async (req, res) => {
+      try {
+        const { email } = req.params;
+
+        const history = await db
+          .collection("donations")
+          .find({ userEmail: email.trim().toLowerCase() })
+          .sort({ timestamp: -1 })
+          .toArray();
+
+        res.status(200).json(history);
+      } catch (error) {
+        res.status(500).json([]);
+      }
+    });
+
+    // 📊 ADMIN ROUTE: Fetch all users' donation history from the central ledger
+    app.get("/admin/all-donation-history", async (req, res) => {
+      try {
+        const allHistory = await db
+          .collection("donations")
+          .find({})
+          .sort({ timestamp: -1 })
+          .toArray();
+
+        res.status(200).json(allHistory);
+      } catch (error) {
+        console.error("Admin global ledger fetch error:", error);
+        res.status(500).json([]);
+      }
+    });
+
+    // 👥 Get all registered accounts using your pre-defined userCollection
+    app.get("/admin/all-users", async (req, res) => {
+      try {
+        const users = await userCollection
+          .find({})
+          .project({ password: 0 })
+          .toArray();
+
+        res.status(200).json(users);
+      } catch (error) {
+        console.error(
+          "Failed to fetch user documents from MongoDB node:",
+          error,
+        );
+        res.status(500).json([]);
+      }
+    });
+
     // 📊 REPORTING & AUDIT ENPOINT (ADMIN & USER SHARED)
     app.get("/reporting-analytics", async (req, res) => {
       try {
         const db = client.db("l2-assignment-06");
         const reliefGoodsCollection = db.collection("reliefgoods");
 
-        // মঙ্গোডিবি এগ্রিগেশন পাইপলাইন দিয়ে ক্যাটাগরি অনুযায়ী ডাটা প্রসেসিং
         const auditData = await reliefGoodsCollection
           .aggregate([
             {
               $group: {
-                _id: "$category", // ক্যাটাগরি বা ক্যাম্প নেম অনুযায়ী গ্রুপ করা
+                _id: "$category",
                 receivedStock: { $sum: { $toInt: "$amount" } },
-                // ডিস্ট্রিবিউটেড এবং ড্যামেজড স্টকের ডাইনামিক কন্ডিশনাল ক্যালকুলেশন
                 distributedStock: {
                   $sum: {
                     $cond: [
@@ -103,7 +188,6 @@ async function run() {
 
         const cleanEmail = String(email).trim().toLowerCase();
 
-        // ডুপ্লিকেট ইউজার চেক
         const existingUser = await userCollection.findOne({
           email: cleanEmail,
         });
@@ -115,12 +199,11 @@ async function run() {
 
         const hashedPassword = await bcrypt.hash(password, 10);
 
-        // 🎯 গ্যারান্টিড ডাটা স্ট্রাকচার (role: "user" সহ)
         const finalUserData = {
           name: String(name).trim(),
           email: cleanEmail,
           password: hashedPassword,
-          role: "user", // এটিই তোমার 'user' কালেকশনে জমা হবে
+          role: "user",
           createdAt: new Date(),
         };
 
