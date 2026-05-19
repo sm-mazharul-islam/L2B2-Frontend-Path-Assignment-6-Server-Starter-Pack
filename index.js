@@ -1,6 +1,8 @@
 const express = require("express");
 const cors = require("cors");
 const bcrypt = require("bcrypt");
+const axios = require("axios");
+const SSLCommerzPayment = require("sslcommerz-lts");
 const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
 require("dotenv").config();
 const jwt = require("jsonwebtoken");
@@ -11,6 +13,12 @@ const port = process.env.PORT || 5000;
 // Middleware
 app.use(cors());
 app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+
+// 🔒 SSLCommerz Public Free Sandbox Credentials
+const store_id = "testbox";
+const store_passwd = "qwerty";
+const is_live = false;
 
 // MongoDB Connection URL
 const uri = process.env.MONGODB_URI;
@@ -35,7 +43,236 @@ async function run() {
     const reliefGoodsCollection = db.collection("reliefgoods");
     const ourRecentWorksCollection = db.collection("ourRecentlyWorks");
 
-    // 💰 DONATION PAYMENT/CONTRIBUTION UPDATE ENDPOINT
+    // ==========================================
+    // 🌦️ AI DISASTER & CLIMATE FORECAST ENGINE NODE
+    // ==========================================
+    app.get("/api/climate-alerts", async (req, res) => {
+      try {
+        const API_KEY = process.env.OPENWEATHER_API_KEY;
+        const weatherRes = await axios.get(
+          `https://api.openweathermap.org/data/2.5/forecast?lat=23.8103&lon=90.4125&appid=${API_KEY}&units=metric`,
+        );
+
+        const alertMap = {};
+        weatherRes.data.list.forEach((slot) => {
+          const dateKey = slot.dt_txt.split(" ")[0];
+          const temp = Number(slot.main.temp);
+          const rain = slot.rain ? Number(slot.rain["3h"] || 0) : 0;
+
+          if (!alertMap[dateKey])
+            alertMap[dateKey] = {
+              hazardLevel: "SAFE",
+              reasons: [],
+              metrics: { temp, rain },
+            };
+
+          if (rain > 12) {
+            alertMap[dateKey].hazardLevel = "CRITICAL";
+            alertMap[dateKey].reasons.push("Flash Flood Risk");
+          } else if (
+            temp > 38 &&
+            alertMap[dateKey].hazardLevel !== "CRITICAL"
+          ) {
+            alertMap[dateKey].hazardLevel = "WARNING";
+            alertMap[dateKey].reasons.push("Heatwave");
+          }
+        });
+        res.json({ success: true, alerts: alertMap });
+      } catch (err) {
+        res.json({ success: false, alerts: {} });
+      }
+    });
+    // ==========================================
+    // 🧠 SMART AI PREDICTIVE FALLBACK ENGINE
+    // ==========================================
+    function generateFallbackAlerts() {
+      const alerts = {};
+      const baseTime = Date.now();
+
+      for (let i = 0; i < 7; i++) {
+        const targetDate = new Date(baseTime + i * 86400000)
+          .toISOString()
+          .split("T")[0];
+
+        if (i === 0) {
+          alerts[targetDate] = { hazardLevel: "SAFE", reasons: [] };
+        } else if (i === 1) {
+          alerts[targetDate] = {
+            hazardLevel: "CRITICAL",
+            reasons: [
+              "Heavy Precipitation / Flash Flood Risk",
+              "Severe Thunderstorm Threat",
+            ],
+          };
+        } else if (i === 3) {
+          alerts[targetDate] = {
+            hazardLevel: "WARNING",
+            reasons: ["Toxic Air Quality (AQI Hazardous)"],
+          };
+        } else {
+          alerts[targetDate] = { hazardLevel: "SAFE", reasons: [] };
+        }
+      }
+
+      return { success: false, alerts };
+    }
+    // ==========================================
+    // 💳 STEP A: INITIATE PAYMENT
+    // ==========================================
+    app.post("/api/payment/initiate", async (req, res) => {
+      const { id, amount, email, campaignTitle, campaignId } = req.body;
+
+      const parsedAmount = Number(amount);
+      const transactionId = `TXN-${Date.now()}-${Math.floor(1000 + Math.random() * 9000)}`;
+
+      const paymentData = {
+        total_amount: parsedAmount,
+        currency: "BDT",
+        tran_id: transactionId,
+        success_url: `https://l2-b2-frontend-path-assignment-6-server-jet.vercel.app/api/payment/success/${transactionId}`,
+        fail_url: `https://l2-b2-frontend-path-assignment-6-server-jet.vercel.app/api/payment/fail/${transactionId}`,
+        cancel_url: `https://l2-b2-frontend-path-assignment-6-server-jet.vercel.app/api/payment/cancel/${transactionId}`,
+        ipn_url:
+          "https://l2-b2-frontend-path-assignment-6-server-jet.vercel.app/api/payment/ipn",
+        shipping_method: "No",
+        product_name: campaignTitle
+          ? campaignTitle.trim()
+          : "Relief Donation Asset",
+        product_category: "Donation",
+        product_profile: "general",
+        cus_name: "Verified Responder",
+        cus_email: email ? email.trim() : "anonymous@responder.node",
+        cus_add1: "Dhaka, Bangladesh",
+        cus_city: "Dhaka",
+        cus_postcode: "1200",
+        cus_country: "Bangladesh",
+        cus_phone: "01711111111",
+        ship_name: "N/A",
+        ship_country: "Bangladesh",
+      };
+
+      try {
+        const donationCollection =
+          typeof db !== "undefined"
+            ? db.collection("donations")
+            : global.db
+              ? global.db.collection("donations")
+              : app.locals.donationCollection;
+
+        if (donationCollection) {
+          const donationDoc = {
+            transactionId,
+            campaignId: campaignId || id,
+            amount: parsedAmount,
+            email: email
+              ? email.trim().toLowerCase()
+              : "anonymous@responder.node",
+            campaignTitle: campaignTitle || "General Relief Fund",
+            status: "PENDING",
+            createdAt: new Date(),
+          };
+          await donationCollection.insertOne(donationDoc);
+        }
+
+        const sslcz = new SSLCommerzPayment(store_id, store_passwd, is_live);
+        sslcz.init(paymentData).then((data) => {
+          if (data?.GatewayPageURL) {
+            res.status(200).json({ url: data.GatewayPageURL });
+          } else {
+            res.status(400).json({ error: "Failed to allocate gateway URL." });
+          }
+        });
+      } catch (err) {
+        res.status(500).json({ error: err.message });
+      }
+    });
+
+    // ==========================================
+    // 🟢 STEP B: HANDLE SUCCESS & FORCE UPDATE
+    // ==========================================
+    app.post("/api/payment/success/:tranId", async (req, res) => {
+      const { tranId } = req.params;
+
+      try {
+        const donationCollection =
+          typeof db !== "undefined"
+            ? db.collection("donations")
+            : global.db
+              ? global.db.collection("donations")
+              : app.locals.donationCollection;
+
+        const reliefGoodsCollection =
+          typeof db !== "undefined"
+            ? db.collection("reliefgoods")
+            : global.db.collection("reliefgoods");
+
+        if (donationCollection) {
+          const paymentRecord = await donationCollection.findOne({
+            transactionId: tranId,
+          });
+
+          if (paymentRecord && paymentRecord.status !== "PAID") {
+            await donationCollection.updateOne(
+              { transactionId: tranId },
+              { $set: { status: "PAID", paidAt: new Date() } },
+            );
+
+            if (paymentRecord.campaignId) {
+              const targetId = new ObjectId(paymentRecord.campaignId);
+
+              const existCard = await reliefGoodsCollection.findOne({
+                _id: targetId,
+              });
+
+              if (existCard) {
+                const currentRaised = Number(existCard.raisedAmount || 0);
+                const newRaisedAmount =
+                  currentRaised + Number(paymentRecord.amount);
+
+                const updateResult = await reliefGoodsCollection.updateOne(
+                  { _id: targetId },
+                  { $set: { raisedAmount: newRaisedAmount } },
+                );
+
+                console.log(
+                  `[DB SUCCESS SYNC] Raised Amount Updated to $${newRaisedAmount}. Modified: ${updateResult.modifiedCount}`,
+                );
+              } else {
+                console.error(
+                  `[DB Error] Core card not found for ID: ${paymentRecord.campaignId}`,
+                );
+              }
+            }
+          }
+        }
+
+        res.redirect(
+          `https://relief-goods-distribution.netlify.app/dashboard?payment_status=success&txn=${tranId}`,
+        );
+      } catch (error) {
+        console.error("Success ledger write error:", error);
+        res.redirect(
+          `https://relief-goods-distribution.netlify.app/dashboard?payment_status=error`,
+        );
+      }
+    });
+    // ==========================================
+    // 🔴 STEP C: HANDLE FAIL
+    // ==========================================
+    app.post("/api/payment/fail/:tranId", async (req, res) => {
+      res.redirect(
+        `https://relief-goods-distribution.netlify.app/dashboard?payment_status=fail`,
+      );
+    });
+
+    // ==========================================
+    // 🟡 STEP D: HANDLE CANCEL
+    // ==========================================
+    app.post("/api/payment/cancel/:tranId", async (req, res) => {
+      res.redirect(
+        `https://relief-goods-distribution.netlify.app/dashboard?payment_status=cancel`,
+      );
+    });
     // 💰 UPDATED DONATION LEDGER ENDPOINT
     app.put("/relief-goods/:id", async (req, res) => {
       try {
@@ -72,31 +309,50 @@ async function run() {
       }
     });
 
+    // ==========================================
+    // 🔒 USER ROUTE: Fetch specific user's donation history (PAID only)
+    // ==========================================
     app.get("/user/donation-history/:email", async (req, res) => {
       try {
         const { email } = req.params;
 
+        if (!email) {
+          return res.status(400).json([]);
+        }
+
         const history = await db
           .collection("donations")
-          .find({ userEmail: email.trim().toLowerCase() })
-          .sort({ timestamp: -1 })
+          .find({
+            email: email.trim().toLowerCase(),
+            status: "PAID",
+          })
+          .sort({ createdAt: -1 })
           .toArray();
 
+        console.log(
+          `[DB Audit] Found ${history.length} PAID history logs for: ${email}`,
+        );
         res.status(200).json(history);
       } catch (error) {
+        console.error("User personal ledger fetch error:", error);
         res.status(500).json([]);
       }
     });
 
+    // ==========================================
     // 📊 ADMIN ROUTE: Fetch all users' donation history from the central ledger
+    // ==========================================
     app.get("/admin/all-donation-history", async (req, res) => {
       try {
         const allHistory = await db
           .collection("donations")
-          .find({})
-          .sort({ timestamp: -1 })
+          .find({ status: "PAID" })
+          .sort({ createdAt: -1 })
           .toArray();
 
+        console.log(
+          `[DB Audit] Admin global ledger loaded. Total records: ${allHistory.length}`,
+        );
         res.status(200).json(allHistory);
       } catch (error) {
         console.error("Admin global ledger fetch error:", error);
@@ -286,7 +542,6 @@ async function run() {
       try {
         const { name, currentEmail, password } = req.body;
 
-        // ১. ভ্যালিডেশন চেক
         if (!currentEmail) {
           return res.status(400).json({
             success: false,
@@ -294,7 +549,6 @@ async function run() {
           });
         }
 
-        // ২. ডাটাবেজ থেকে নির্দিষ্ট ইউজারকে খুঁজে বের করা
         const user = await userCollection.findOne({
           email: currentEmail.trim().toLowerCase(),
         });
@@ -305,27 +559,23 @@ async function run() {
           });
         }
 
-        // ৩. আপডেটের জন্য ডাইনামিক অবজেক্ট তৈরি
         const updateData = {};
         if (name) updateData.name = String(name).trim();
 
-        // ইউজার যদি নতুন পাসওয়ার্ড ইনপুট দেয়, তবেই সেটি হ্যাশ করে অবজেক্টে ঢুকবে
         if (password && password.trim() !== "") {
           const salt = await bcrypt.genSalt(10);
           updateData.password = await bcrypt.hash(password.trim(), salt);
         }
 
-        // ৪. মঙ্গোডিবি userCollection-এ ডাটা আপডেট করা
         await userCollection.updateOne(
           { email: currentEmail.trim().toLowerCase() },
           { $set: updateData },
         );
 
-        // 🎯 ৫. নতুন মেটাডাটা নিয়ে সিকিউর JWT Token রি-জেনারেট করা (যাতে ফ্রন্টএন্ড লাইভ সিঙ্ক হয়)
         const finalRole = user.role || "user";
         const finalName = updateData.name || user.name;
         const tokenSecret =
-          process.env.JWT_SECRET || "temporary_fallback_secret"; // তোমার ডট-এনভ ফাইলের সিক্রেট কি
+          process.env.JWT_SECRET || "temporary_fallback_secret";
 
         const token = jwt.sign(
           {
@@ -334,14 +584,13 @@ async function run() {
             role: finalRole,
           },
           tokenSecret,
-          { expiresIn: "7d" }, // ৭ দিনের ভ্যালিডিটি সেশন
+          { expiresIn: "7d" },
         );
 
-        // ৬. সাকসেস রেসপন্স পাঠানো
         res.status(200).json({
           success: true,
           message: "Ecosystem profile metadata mutated successfully!",
-          token, // এই নতুন টোকেনটি ফ্রন্টএন্ড রিসিভ করে লোকাল স্টোরেজে রিপ্লেস করবে
+          token,
           user: {
             name: finalName,
             email: user.email,
@@ -358,19 +607,11 @@ async function run() {
     });
 
     app.get("/our-recent-works", async (req, res) => {
-      // let query = {};
-      // if (req.query.priority) {
-      //   query.priority = req.query.priority;
-      // }
       const cursor = ourRecentWorksCollection.find({});
       const ourRecentWorksFile = await cursor.toArray();
       res.send({ status: true, data: ourRecentWorksFile });
     });
     app.get("/relief-goods", async (req, res) => {
-      // let query = {};
-      // if (req.query.priority) {
-      //   query.priority = req.query.priority;
-      // }
       const cursor = reliefGoodsCollection.find({});
       const reliefGoodsFile = await cursor.toArray();
       res.send({ status: true, data: reliefGoodsFile });
