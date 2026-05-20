@@ -11,14 +11,15 @@ const app = express();
 const port = process.env.PORT || 5000;
 
 // Middleware
-app.use(cors());
+// app.use(cors());
+app.use(
+  cors({
+    origin: "*",
+    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization"],
+  }),
+);
 app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
-
-// 🔒 SSLCommerz Public Free Sandbox Credentials
-const store_id = "testbox";
-const store_passwd = "qwerty";
-const is_live = false;
 
 // MongoDB Connection URL
 const uri = process.env.MONGODB_URI;
@@ -116,132 +117,76 @@ async function run() {
 
       return { success: false, alerts };
     }
-    // ==========================================
-    // 💳 STEP A: INITIATE PAYMENT
-    // ==========================================
+    // ১. পেমেন্ট ইনিশিয়েট রুট
     app.post("/api/payment/initiate", async (req, res) => {
       const { id, amount, email, campaignTitle, campaignId } = req.body;
-
       const parsedAmount = Number(amount);
-      const transactionId = `TXN-${Date.now()}-${Math.floor(1000 + Math.random() * 9000)}`;
-
-      const paymentData = {
-        total_amount: parsedAmount,
-        currency: "BDT",
-        tran_id: transactionId,
-        success_url: `https://l2-b2-frontend-path-assignment-6-server-jet.vercel.app/api/payment/success/${transactionId}`,
-        fail_url: `https://l2-b2-frontend-path-assignment-6-server-jet.vercel.app/api/payment/fail/${transactionId}`,
-        cancel_url: `https://l2-b2-frontend-path-assignment-6-server-jet.vercel.app/api/payment/cancel/${transactionId}`,
-        ipn_url:
-          "https://l2-b2-frontend-path-assignment-6-server-jet.vercel.app/api/payment/ipn",
-        shipping_method: "No",
-        product_name: campaignTitle
-          ? campaignTitle.trim()
-          : "Relief Donation Asset",
-        product_category: "Donation",
-        product_profile: "general",
-        cus_name: "Verified Responder",
-        cus_email: email ? email.trim() : "anonymous@responder.node",
-        cus_add1: "Dhaka, Bangladesh",
-        cus_city: "Dhaka",
-        cus_postcode: "1200",
-        cus_country: "Bangladesh",
-        cus_phone: "01711111111",
-        ship_name: "N/A",
-        ship_country: "Bangladesh",
-      };
+      const transactionId = `TXN_${Date.now()}`;
 
       try {
-        const donationCollection =
-          typeof db !== "undefined"
-            ? db.collection("donations")
-            : global.db
-              ? global.db.collection("donations")
-              : app.locals.donationCollection;
+        const donationCollection = db.collection("donations");
 
-        if (donationCollection) {
-          const donationDoc = {
-            transactionId,
-            campaignId: campaignId || id,
-            amount: parsedAmount,
-            email: email
-              ? email.trim().toLowerCase()
-              : "anonymous@responder.node",
-            campaignTitle: campaignTitle || "General Relief Fund",
-            status: "PENDING",
-            createdAt: new Date(),
-          };
-          await donationCollection.insertOne(donationDoc);
-        }
+        const donationDoc = {
+          transactionId,
+          campaignId: campaignId || id,
+          amount: parsedAmount,
+          currency: "BDT",
+          email: email
+            ? email.trim().toLowerCase()
+            : "anonymous@responder.node",
+          campaignTitle: campaignTitle || "General Relief Fund",
+          status: "PENDING", // শুরুতেই পেন্ডিং থাকবে
+          createdAt: new Date(),
+        };
 
-        const sslcz = new SSLCommerzPayment(store_id, store_passwd, is_live);
-        sslcz.init(paymentData).then((data) => {
-          if (data?.GatewayPageURL) {
-            res.status(200).json({ url: data.GatewayPageURL });
-          } else {
-            res.status(400).json({ error: "Failed to allocate gateway URL." });
-          }
+        await donationCollection.insertOne(donationDoc);
+
+        // মক পেমেন্ট: সরাসরি সাকসেস লিংকে রিডাইরেক্ট করার জন্য রেসপন্স
+        res.status(200).json({
+          success: true,
+          url: `https://l2-b2-frontend-path-assignment-6-server-jet.vercel.app/api/payment/success/${transactionId}`, // সাকসেস রুটে যাবে
+          transactionId,
         });
       } catch (err) {
         res.status(500).json({ error: err.message });
       }
     });
 
-    // ==========================================
-    // 🟢 STEP B: HANDLE SUCCESS & FORCE UPDATE
-    // ==========================================
-    app.post("/api/payment/success/:tranId", async (req, res) => {
+    // ২. সাকসেস রুট (Raised Amount আপডেট লজিক সহ)
+    app.get("/api/payment/success/:tranId", async (req, res) => {
       const { tranId } = req.params;
 
       try {
-        const donationCollection =
-          typeof db !== "undefined"
-            ? db.collection("donations")
-            : global.db
-              ? global.db.collection("donations")
-              : app.locals.donationCollection;
+        const donationCollection = db.collection("donations");
+        const reliefGoodsCollection = db.collection("reliefgoods");
 
-        const reliefGoodsCollection =
-          typeof db !== "undefined"
-            ? db.collection("reliefgoods")
-            : global.db.collection("reliefgoods");
+        const paymentRecord = await donationCollection.findOne({
+          transactionId: tranId,
+        });
 
-        if (donationCollection) {
-          const paymentRecord = await donationCollection.findOne({
-            transactionId: tranId,
-          });
+        if (paymentRecord && paymentRecord.status !== "PAID") {
+          // স্ট্যাটাস আপডেট
+          await donationCollection.updateOne(
+            { transactionId: tranId },
+            { $set: { status: "PAID", paidAt: new Date() } },
+          );
 
-          if (paymentRecord && paymentRecord.status !== "PAID") {
-            await donationCollection.updateOne(
-              { transactionId: tranId },
-              { $set: { status: "PAID", paidAt: new Date() } },
-            );
+          // Raised Amount আপডেট (ReliefGoods)
+          if (paymentRecord.campaignId) {
+            const targetId = new ObjectId(paymentRecord.campaignId);
+            const existCard = await reliefGoodsCollection.findOne({
+              _id: targetId,
+            });
 
-            if (paymentRecord.campaignId) {
-              const targetId = new ObjectId(paymentRecord.campaignId);
+            if (existCard) {
+              const currentRaised = Number(existCard.raisedAmount || 0);
+              const newRaisedAmount =
+                currentRaised + Number(paymentRecord.amount);
 
-              const existCard = await reliefGoodsCollection.findOne({
-                _id: targetId,
-              });
-
-              if (existCard) {
-                const currentRaised = Number(existCard.raisedAmount || 0);
-                const newRaisedAmount =
-                  currentRaised + Number(paymentRecord.amount);
-
-                const updateResult = await reliefGoodsCollection.updateOne(
-                  { _id: targetId },
-                  { $set: { raisedAmount: newRaisedAmount } },
-                );
-
-                console.log(
-                  `[DB SUCCESS SYNC] Raised Amount Updated to $${newRaisedAmount}. Modified: ${updateResult.modifiedCount}`,
-                );
-              } else {
-                console.error(
-                  `[DB Error] Core card not found for ID: ${paymentRecord.campaignId}`,
-                );
-              }
+              await reliefGoodsCollection.updateOne(
+                { _id: targetId },
+                { $set: { raisedAmount: newRaisedAmount } },
+              );
             }
           }
         }
@@ -250,65 +195,36 @@ async function run() {
           `https://relief-goods-distribution.netlify.app/dashboard?payment_status=success&txn=${tranId}`,
         );
       } catch (error) {
-        console.error("Success ledger write error:", error);
         res.redirect(
           `https://relief-goods-distribution.netlify.app/dashboard?payment_status=error`,
         );
       }
     });
-    // ==========================================
-    // 🔴 STEP C: HANDLE FAIL
-    // ==========================================
-    app.post("/api/payment/fail/:tranId", async (req, res) => {
+
+    // ৩. ফেইল ও ক্যান্সেল রুট
+    app.get("/api/payment/fail/:tranId", async (req, res) => {
+      await db
+        .collection("donations")
+        .updateOne(
+          { transactionId: req.params.tranId },
+          { $set: { status: "FAILED" } },
+        );
       res.redirect(
         `https://relief-goods-distribution.netlify.app/dashboard?payment_status=fail`,
       );
     });
 
-    // ==========================================
-    // 🟡 STEP D: HANDLE CANCEL
-    // ==========================================
-    app.post("/api/payment/cancel/:tranId", async (req, res) => {
+    app.get("/api/payment/cancel/:tranId", async (req, res) => {
+      await db
+        .collection("donations")
+        .updateOne(
+          { transactionId: req.params.tranId },
+          { $set: { status: "CANCELLED" } },
+        );
       res.redirect(
         `https://relief-goods-distribution.netlify.app/dashboard?payment_status=cancel`,
       );
     });
-    // 💰 UPDATED DONATION LEDGER ENDPOINT
-    app.put("/relief-goods/:id", async (req, res) => {
-      try {
-        const { id } = req.params;
-        const { donateAmount, userEmail, campaignTitle, category } = req.body;
-
-        if (!donateAmount || donateAmount <= 0) {
-          return res
-            .status(400)
-            .json({ success: false, message: "Invalid payload." });
-        }
-
-        const filter = { _id: new ObjectId(id) };
-        const updateDoc = { $inc: { raisedAmount: Number(donateAmount) } };
-        await reliefGoodsCollection.updateOne(filter, updateDoc);
-
-        if (userEmail) {
-          const donationLog = {
-            userEmail: userEmail.trim().toLowerCase(),
-            campaignTitle: campaignTitle || "Relief Package Aid",
-            category: category || "General",
-            amount: Number(donateAmount),
-            timestamp: new Date(),
-          };
-          await db.collection("donations").insertOne(donationLog);
-        }
-
-        const updatedGoods = await reliefGoodsCollection.findOne(filter);
-        res.status(200).json(updatedGoods);
-      } catch (error) {
-        res
-          .status(500)
-          .json({ success: false, message: "Ledger insertion failed." });
-      }
-    });
-
     // ==========================================
     // 🔒 USER ROUTE: Fetch specific user's donation history (PAID only)
     // ==========================================
@@ -338,7 +254,7 @@ async function run() {
         res.status(500).json([]);
       }
     });
-
+    //!
     // ==========================================
     // 📊 ADMIN ROUTE: Fetch all users' donation history from the central ledger
     // ==========================================
