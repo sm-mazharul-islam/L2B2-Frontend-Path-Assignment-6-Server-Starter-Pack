@@ -426,20 +426,16 @@ async function run() {
       res.send(result);
     });
 
-    // 3. অ্যাডমিন - সব রিভিউ দেখা
     app.get("/admin/reviews", async (req, res) => {
       const result = await db.collection("reviews").find().toArray();
       res.send(result);
     });
 
-    // server.js এ এটি চেক করো
     app.patch("/reviews/pin/:id", async (req, res) => {
-      // /api/prefix থাকলে সেটি যোগ করো
       try {
         const { id } = req.params;
         const { isPinned } = req.body;
 
-        // ObjectId চেক করো
         const result = await db
           .collection("reviews")
           .updateOne(
@@ -456,7 +452,6 @@ async function run() {
       }
     });
 
-    // 5. ডিলিট করা
     app.delete("/reviews/:id", async (req, res) => {
       const result = await db
         .collection("reviews")
@@ -486,7 +481,6 @@ async function run() {
             .json({ success: false, message: "Invalid credentials" });
         }
 
-        // 🎯 প্রো-ট্রিক: ডাটাবেজে রোল ব্যাকআপ হিসেবে না থাকলেও টোকেনে রোল পাঠানোর ব্যবস্থা
         const userRole = user.role || "user";
 
         const secret = process.env.JWT_SECRET || "temporary_fallback_secret";
