@@ -15,7 +15,7 @@ const port = process.env.PORT || 5000;
 app.use(
   cors({
     origin: "*",
-    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
     allowedHeaders: ["Content-Type", "Authorization"],
   }),
 );
@@ -84,7 +84,7 @@ async function run() {
       }
     });
     // ==========================================
-    // 🧠 SMART AI PREDICTIVE FALLBACK ENGINE
+    // SMART AI PREDICTIVE FALLBACK ENGINE
     // ==========================================
     function generateFallbackAlerts() {
       const alerts = {};
@@ -266,9 +266,9 @@ async function run() {
           .sort({ createdAt: -1 })
           .toArray();
 
-        console.log(
-          `[DB Audit] Admin global ledger loaded. Total records: ${allHistory.length}`,
-        );
+        // console.log(
+        //   `[DB Audit] Admin global ledger loaded. Total records: ${allHistory.length}`,
+        // );
         res.status(200).json(allHistory);
       } catch (error) {
         console.error("Admin global ledger fetch error:", error);
@@ -404,6 +404,64 @@ async function run() {
           .status(500)
           .json({ success: false, message: "Internal server error" });
       }
+    });
+
+    //!
+
+    // 1. রিভিউ পোস্ট করা
+    app.post("/reviews", async (req, res) => {
+      const review = req.body; // {userId, userName, comment, rating, email}
+      const result = await db
+        .collection("reviews")
+        .insertOne({ ...review, isPinned: false, createdAt: new Date() });
+      res.send(result);
+    });
+
+    // 2. ইউজারের নিজের রিভিউ দেখা
+    app.get("/reviews/:email", async (req, res) => {
+      const result = await db
+        .collection("reviews")
+        .find({ email: req.params.email })
+        .toArray();
+      res.send(result);
+    });
+
+    // 3. অ্যাডমিন - সব রিভিউ দেখা
+    app.get("/admin/reviews", async (req, res) => {
+      const result = await db.collection("reviews").find().toArray();
+      res.send(result);
+    });
+
+    // server.js এ এটি চেক করো
+    app.patch("/reviews/pin/:id", async (req, res) => {
+      // /api/prefix থাকলে সেটি যোগ করো
+      try {
+        const { id } = req.params;
+        const { isPinned } = req.body;
+
+        // ObjectId চেক করো
+        const result = await db
+          .collection("reviews")
+          .updateOne(
+            { _id: new ObjectId(id) },
+            { $set: { isPinned: isPinned } },
+          );
+
+        if (result.matchedCount === 0) {
+          return res.status(404).send({ error: "Review not found" });
+        }
+        res.send({ success: true });
+      } catch (error) {
+        res.status(400).send({ error: "Invalid ID format" });
+      }
+    });
+
+    // 5. ডিলিট করা
+    app.delete("/reviews/:id", async (req, res) => {
+      const result = await db
+        .collection("reviews")
+        .deleteOne({ _id: new ObjectId(req.params.id) });
+      res.send(result);
     });
 
     // ==========================================
